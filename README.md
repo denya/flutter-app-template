@@ -1,6 +1,5 @@
 # Flutter App Template
 
-Created by @denya
 
 Contains:
 
@@ -44,6 +43,14 @@ TODO: Improve versioun build numeration (use timestamp YYYYMMDDHHMM.seq)
 
 * #android `upload-keystore.jks` ← Keystore to build & sign android app
 
+## TODO LIst
+
+* Add the app skeleton :)
+
+* Add rename tool & change package_name / bundleId tool
+
+* Add Quick loom about configuration of Firebase, Apple AppConnect, Google Play Console
+
 ## Authors
 
-* Denis Moskalets (@denya)
+* Denis Moskalets ([@denya](https://github.com/denya))
