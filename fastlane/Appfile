@@ -1,0 +1,12 @@
+
+  apple_id "apple.id@company.org"  # Your Apple email address
+  team_id "H00AAAAAAA"
+  itc_team_id "142424242"
+
+
+  # iOS bundles id for fastlane match
+  app_identifier: ['org.companyname.appname', 'org.companyname.appname-dev']
+
+  for_platform :ios do
+    app_identifier ENV['IOS_BUNDLE_ID']
+  end

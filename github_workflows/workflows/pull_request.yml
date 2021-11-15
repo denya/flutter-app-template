@@ -1,0 +1,217 @@
+name: pull_request
+on:
+  push:
+    branches:
+    - "feature/**"
+    - "release/**"
+    - "tech/**"
+  pull_request:
+    branches:
+    - "feature/**"
+    - "release/**"
+    - "tech/**"
+
+
+env:
+  JAVA_VERSION: '15'
+  FLUTTER_CHANNEL: 'stable'  # 'dev', 'alpha', default to: 'stable'
+  FLUTTER_VERSION: '2.5.3'
+  RUBY_VERSION: '2.7'
+
+
+jobs:
+  test_and_lint:
+    # This job will run on ubuntu virtual machine
+    runs-on: ubuntu-latest
+    steps:
+    
+    # Setup Java environment in order to build the Android app.
+    - uses: actions/checkout@v1
+    
+    - name: Set up Java
+      uses: actions/setup-java@v1
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+
+    - name: Setup Flutter Cache
+      id: cache-flutter
+      uses: actions/cache@v2
+      with:
+        path: /opt/hostedtoolcache/flutter  # Linux path
+        key: ${{ runner.os }}-flutter-${{ env.FLUTTER_VERSION }}
+        restore-keys: |
+          ${{ runner.os }}-flutter-
+
+    - uses: subosito/flutter-action@v1.5.3
+      with:
+        channel: ${{ env.FLUTTER_CHANNEL }} 
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+    
+    - run: flutter pub get
+    - run: flutter packages pub run build_runner build --delete-conflicting-outputs
+    - run: flutter format --set-exit-if-changed .
+    - run: flutter analyze .
+    - run: flutter test
+    
+  build_ios:
+    name: Build Flutter (iOS)
+    needs: test_and_lint
+    runs-on: macos-11
+    if: contains(github.event.commits[0].message, '#beta')
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions/setup-java@v1
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+
+    - name: Setup Flutter Cache
+      id: cache-flutter
+      uses: actions/cache@v2
+      with:
+        path: /Users/runner/hostedtoolcache/flutter  # Macos path
+        key: ${{ runner.os }}-flutter-${{ env.FLUTTER_VERSION }}
+        restore-keys: |
+          ${{ runner.os }}-flutter-
+
+    - uses: subosito/flutter-action@v1.5.3
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+
+    - name: Install pubs
+      run: flutter pub get
+
+    - name: Generate build_runner code 
+      run: flutter packages pub run build_runner build --delete-conflicting-outputs
+
+    - name: Install Ruby    
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: ${{ env.RUBY_VERSION }}
+        bundler-cache: true
+      env:
+        BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+
+    - name: Setup Pods Cache
+      id: cache-pods
+      uses: actions/cache@v2
+      with:
+        path: ios/Pods
+        key: ${{ runner.os }}-pods-v2-${{ hashFiles('**/Podfile.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-pods-v2-
+
+    - name: Install SSH key
+      uses: shimataro/ssh-key-action@v2
+      with:
+        key: ${{ secrets.SSH_KEY }}
+        known_hosts: ${{ secrets.KNOWN_HOSTS }}
+
+    - name: Create Firebase Service Credentials file
+      run: |
+        echo "$FIREBASE_CREDENTIALS_DEV_JSON" > firebase_credentials.dev.json.b64
+        base64 -d -i firebase_credentials.dev.json.b64 > firebase_credentials.dev.json
+
+        echo "$FIREBASE_CREDENTIALS_PROD_JSON" > firebase_credentials.prod.json.b64
+        base64 -d -i firebase_credentials.prod.json.b64 > firebase_credentials.prod.json
+
+        echo "$ANDROID_KEY_PROPERTIES_B64" > android/key.properties.b64
+        base64 -d -i android/key.properties.b64 > android/key.properties
+
+        echo "$ANDROID_JKS_B64" > play-store.key.json.b64
+        base64 -d -i play-store.key.json.b64 > play-store.key.json
+      env:
+        FIREBASE_CREDENTIALS_DEV_JSON: ${{ secrets.FIREBASE_CREDENTIALS_DEV_JSON }}
+        FIREBASE_CREDENTIALS_PROD_JSON: ${{ secrets.FIREBASE_CREDENTIALS_PROD_JSON }}
+        ANDROID_KEY_PROPERTIES_B64: ${{ secrets.ANDROID_KEY_PROPERTIES_B64 }}
+        ANDROID_JKS_B64: ${{ secrets.ANDROID_JKS_B64 }}
+
+    - name: Bump version
+      run: |
+        export NEW_VERSION=${GITHUB_RUN_ID}.${GITHUB_RUN_NUMBER}
+        tools/version_bump.sh $NEW_VERSION
+        perl -i -pe 's/^(.*)(FLUTTER_BUILD_NUMBER=)(.+)(["])$/$1.$2.$ENV{NEW_VERSION}.$4/e' ios/Flutter/flutter_export_environment.sh
+        perl -i -pe 's/^(.*)(CURRENT_PROJECT_VERSION = )(["])(.+)(["])(.+)$/$1.$2.$3.$ENV{NEW_VERSION}.$5.$6/e' ios/Runner.xcodeproj/project.pbxproj
+
+    - name: Fastlane iOS        
+      uses: maierj/fastlane-action@v2.1.0
+      with:
+        lane: 'ios firebase_beta_ios --env dev'
+      env:
+        MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+
+  build_android:
+    name: Build Flutter (Android)
+    needs: test_and_lint
+    runs-on: ubuntu-latest
+    if: contains(github.event.commits[0].message, '#beta')
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions/setup-java@v1
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+
+    - name: Setup Flutter Cache
+      id: cache-flutter
+      uses: actions/cache@v2
+      with:
+        path: /opt/hostedtoolcache/flutter  # Linux path
+        key: ${{ runner.os }}-flutter-${{ env.FLUTTER_VERSION }}
+        restore-keys: |
+          ${{ runner.os }}-flutter-
+
+    - uses: subosito/flutter-action@v1.5.3
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+
+    - name: Install pubs
+      run: flutter pub get
+
+    - name: Generate build_runner code 
+      run: flutter packages pub run build_runner build --delete-conflicting-outputs
+
+    - name: Install Ruby    
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: ${{ env.RUBY_VERSION }}
+        bundler-cache: true
+      env:
+        BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+
+    - name: Install SSH key
+      uses: shimataro/ssh-key-action@v2
+      with:
+        key: ${{ secrets.SSH_KEY }}
+        known_hosts: ${{ secrets.KNOWN_HOSTS }}
+
+    - name: Create Firebase Service Credentials file
+      run: |
+        echo "$FIREBASE_CREDENTIALS_DEV_JSON" > firebase_credentials.dev.json.b64
+        base64 -d -i firebase_credentials.dev.json.b64 > firebase_credentials.dev.json
+
+        echo "$FIREBASE_CREDENTIALS_PROD_JSON" > firebase_credentials.prod.json.b64
+        base64 -d -i firebase_credentials.prod.json.b64 > firebase_credentials.prod.json
+
+        echo "$ANDROID_KEY_PROPERTIES_B64" > android/key.properties.b64
+        base64 -d -i android/key.properties.b64 > android/key.properties
+
+        echo "$ANDROID_JKS_B64" > play-store.key.json.b64
+        base64 -d -i play-store.key.json.b64 play-store.key.json
+      env:
+        FIREBASE_CREDENTIALS_DEV_JSON: ${{ secrets.FIREBASE_CREDENTIALS_DEV_JSON }}
+        FIREBASE_CREDENTIALS_PROD_JSON: ${{ secrets.FIREBASE_CREDENTIALS_PROD_JSON }}
+        ANDROID_KEY_PROPERTIES_B64: ${{ secrets.ANDROID_KEY_PROPERTIES_B64 }}
+        ANDROID_JKS_B64: ${{ secrets.ANDROID_JKS_B64 }}
+
+    - name: Bump version
+      run: |
+        export NEW_VERSION=${GITHUB_RUN_ID}.${GITHUB_RUN_NUMBER}
+        tools/version_bump.sh $NEW_VERSION
+        perl -i -pe 's/^(.*)(FLUTTER_BUILD_NUMBER=)(.+)(["])$/$1.$2.$ENV{NEW_VERSION}.$4/e' ios/Flutter/flutter_export_environment.sh
+        perl -i -pe 's/^(.*)(CURRENT_PROJECT_VERSION = )(["])(.+)(["])(.+)$/$1.$2.$3.$ENV{NEW_VERSION}.$5.$6/e' ios/Runner.xcodeproj/project.pbxproj
+
+    - name: Fastlane Android
+      uses: maierj/fastlane-action@v2.1.0
+      with:
+        lane: 'android firebase_beta_android --env dev'
+      env:
+        MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}

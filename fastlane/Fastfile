@@ -1,0 +1,180 @@
+# set up keychain and match
+# default_platform(:ios)
+
+# Distribute to Firebase
+lane :firebase_beta do | options |
+  Fastlane::LaneManager.cruise_lane("ios", "firebase_beta_ios", options)
+  Fastlane::LaneManager.cruise_lane("android", "firebase_beta_android", options)
+end
+
+
+platform :ios do 
+  # Distibute to Testflight
+  lane :testflight_beta do
+    checkEnv
+    setup_ci
+    match(type: "appstore", readonly: is_ci)
+    match(type: "development", readonly: is_ci)
+    sync_code_signing(type: "appstore")
+
+    build_ios(
+      flavor: ENV['FLAVOR'],
+      export_method: "appstore"
+    )
+
+    comments = changelog_from_git_commits
+    upload_to_testflight(
+      username: ENV['APPLE_CONNECT_USERNAME'],
+      ipa: "./build/Runner/Runner.ipa",
+      changelog: comments,
+      skip_waiting_for_build_processing: false
+    )
+    upload_symbols(project: ENV['FIREBASE_PROJECT'], flavor: ENV['FLAVOR'])
+  end
+
+  lane :firebase_beta_ios do
+    checkEnv
+    setup_ci
+    match(type: "appstore", readonly: is_ci)
+    match(type: "development", readonly: is_ci)
+
+    build_ios(
+      flavor: ENV['FLAVOR'],
+      export_method: "development"
+    )
+    
+    upload_firebase_ios(app: ENV['FIREBASE_APP'], flavor: ENV['FLAVOR'])
+  end
+
+  # Certificates magic...
+  desc "Get certificates"
+  lane :certificates do
+    sync_code_signing(
+      type: "development",
+      force_for_new_devices: true,
+      readonly: false
+    )
+    sync_code_signing(
+      type: "appstore",
+      readonly: true
+    )
+  end
+
+  desc "Generate new certificates"
+  lane :generate_new_certificates do
+    sync_code_signing(
+      type: "development",
+      force_for_new_devices: true,
+      readonly: false
+    )
+    sync_code_signing(
+      type: "appstore",
+      readonly: false
+    )
+  end
+end
+
+platform :android do
+  # ANDROID
+  lane :firebase_beta_android do
+    checkEnv
+    setup_ci
+    build_android_bundle(flavor: ENV['FLAVOR'])
+    upload_firebase_android(app: ENV['FIREBASE_ANDROID_APP'], flavor: ENV['FLAVOR'])
+  end
+
+  lane :play_beta do |options|
+    checkEnv
+    setup_ci
+    build_android_bundle(flavor: ENV['FLAVOR'])
+    upload_to_play_store(
+      package_name: ENV['ANDORID_PACKAGE_NAME'],
+      track: "internal",  # production
+      release_status: "draft",
+      json_key: "./play-store.key.json",
+      aab: "./build/app/outputs/bundle/#{ENV['FLAVOR']}Release/app-#{ENV['FLAVOR']}-release.aab",
+    )
+  end
+
+end
+
+
+# Private Lane
+private_lane :build_ios do |options|
+  podRepoUpdate
+  Dir.chdir "../ios" do
+    sh("flutter", "build", "ios", "--release", "--no-pub", "--config-only", "--flavor", options[:flavor], "-t", "lib/main_#{options[:flavor]}.dart", "--no-codesign")
+    convertAppToIpa(
+      flavor: options[:flavor],
+      export_method: options[:export_method]
+    )
+  end
+end
+
+private_lane :build_android_apk do |options|
+  Dir.chdir ".." do
+    sh("flutter", "build", "apk", "--release", "--flavor", options[:flavor], "-t" "lib/main_#{options[:flavor]}.dart")    # Build the application
+  end
+end
+
+private_lane :build_android_bundle do |options|
+  Dir.chdir ".." do
+    sh("flutter", "build", "appbundle", "--release", "--flavor", options[:flavor], "-t" "lib/main_#{options[:flavor]}.dart")    # Build the application
+  end
+end
+
+private_lane :upload_symbols do |options|
+  download_dsyms # this is the important part
+  sentry_upload_dif(
+    auth_token: ENV['SENTRY_AUTH_TOKEN'],
+    org_slug: ENV['SENTRY_ORG_SLUG'],
+    project_slug: options[:project],
+  )
+end
+
+private_lane :upload_firebase_ios do |options|
+  comments = changelog_from_git_commits
+  firebase_app_distribution(
+    app: options[:app],
+    groups: "#{ENV['FIREBASE_DISTRIBUTION_GROUP']}",
+    release_notes: comments,
+    service_credentials_file: "./firebase_credentials.#{options[:flavor]}.json",
+    ipa_path: "./build/Runner/Runner.ipa"
+  )
+end
+
+private_lane :upload_firebase_android do |options|
+  comments = changelog_from_git_commits
+  firebase_app_distribution(
+    app: options[:app],
+    groups: "#{ENV['FIREBASE_DISTRIBUTION_GROUP']}",
+    release_notes: comments,
+    android_artifact_type: "APK",
+    android_artifact_path: "./build/app/outputs/flutter-apk/app.apk",
+    service_credentials_file: "./firebase_credentials.#{options[:flavor]}.json",
+  )
+end
+
+
+private_lane :checkEnv do |options|
+  if ENV['FIREBASE_APP'].nil? then
+    UI.user_error!("Please pass --env <env> for the lane")
+  end
+end
+
+private_lane :podRepoUpdate do |options|
+  Dir.chdir "../ios" do
+    sh("pod", "repo", "update")
+  end
+end
+
+private_lane :convertAppToIpa do |options|
+  gym(
+    workspace: 'ios/Runner.xcworkspace',
+    archive_path: "./build/Runner.xcarchive",
+    output_directory: "./build/Runner",
+    scheme: options[:flavor],
+    configuration: "Release-#{options[:flavor]}",
+    export_method: options[:export_method]
+  )
+end
